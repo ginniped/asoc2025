@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="it">
+
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Risultati Generazione</title>
+        <style>
+            body {
+                font-family: 'Arial', sans-serif;
+                background-color: #f0f0f0;
+                color: #333;
+                padding: 20px;
+            }
+
+            h1 {
+                text-align: center;
+                color: #5a5a5a;
+            }
+
+            .scenario-container {
+                max-width: 1200px;
+                margin: 0 auto;
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+                gap: 40px;
+            }
+
+            .scenario-box {
+                background-color: #fff;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+                text-align: center;
+            }
+
+            .scenario-box img {
+                max-width: 100%;
+                height: auto;
+                border-radius: 4px;
+                margin-bottom: 15px;
+            }
+
+            .scenario-box h2 {
+                color: #2e8b57;
+                margin-bottom: 10px;
+            }
+
+            .scenario-box h3 {
+                margin-bottom: 5px;
+                color: #555;
+            }
+
+            .scenario-box p {
+                font-size: 0.9em;
+                line-height: 1.4;
+                color: #666;
+            }
+
+            .back-link {
+                display: block;
+                text-align: center;
+                margin-top: 30px;
+                text-decoration: none;
+                color: #4CAF50;
+                font-weight: bold;
+            }
+
+            .back-link:hover {
+                text-decoration: underline;
+            }
+        </style>
+    </head>
+
+    <body>
+        <h1>Scenari Generati</h1>
+        {% if scenarios %}
+        <div class="scenario-container">
+            {% for scenario in scenarios %}
+            <div class="scenario-box">
+                {% if scenario.image_url %}
+                <img src="{{ scenario.image_url }}" alt="{{ scenario.title }}">
+                {% else %}
+                <p>Immagine non generata.</p>
+                {% endif %}
+                <h2>{{ scenario.title }}</h2>
+                <h3>Ambientazione</h3>
+                <p>{{ scenario.ambientazione }}</p>
+                <h3>Trama/Missione principale</h3>
+                <p>{{ scenario.trama }}</p>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p style="text-align: center;">Nessuno scenario è stato generato. Riprova.</p>
+        {% endif %}
+        <a href="/" class="back-link">Torna alla pagina iniziale</a>
+    </body>
+
+</html>
