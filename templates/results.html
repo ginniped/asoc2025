@@ -32,6 +32,12 @@
                 border-radius: 8px;
                 box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
                 text-align: center;
+                cursor: pointer;
+                transition: transform 0.2s;
+            }
+
+            .scenario-box:hover {
+                transform: scale(1.05);
             }
 
             .scenario-box img {
@@ -73,28 +79,30 @@
     </head>
 
     <body>
-        <h1>Scenari Generati</h1>
+        <h1>Scegli la tua Avventura</h1>
         {% if scenarios %}
         <div class="scenario-container">
             {% for scenario in scenarios %}
-            <div class="scenario-box">
-                {% if scenario.image_url %}
-                <img src="{{ scenario.image_url }}" alt="{{ scenario.title }}">
-                {% else %}
-                <p>Immagine non generata.</p>
-                {% endif %}
-                <h2>{{ scenario.title }}</h2>
-                <h3>Ambientazione</h3>
-                <p>{{ scenario.ambientazione }}</p>
-                <h3>Trama/Missione principale</h3>
-                <p>{{ scenario.trama }}</p>
-            </div>
+            <a href="/adventure/{{ scenario.title }}" style="text-decoration: none; color: inherit;">
+                <div class="scenario-box">
+                    {% if scenario.image_url %}
+                    <img src="{{ scenario.image_url }}" alt="{{ scenario.title }}">
+                    {% else %}
+                    <p>Immagine non generata.</p>
+                    {% endif %}
+                    <h2>{{ scenario.title }}</h2>
+                    <h3>Ambientazione</h3>
+                    <p>{{ scenario.ambientazione }}</p>
+                    <h3>Trama/Missione principale</h3>
+                    <p>{{ scenario.trama }}</p>
+                </div>
+            </a>
             {% endfor %}
         </div>
         {% else %}
         <p style="text-align: center;">Nessuno scenario è stato generato. Riprova.</p>
         {% endif %}
-        <a href="/" class="back-link">Torna alla pagina iniziale</a>
+        <a href="/" class="back-link">Genera nuove avventure</a>
     </body>
 
 </html>
