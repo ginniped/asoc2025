@@ -10,37 +10,19 @@
                 font-family: 'Arial', sans-serif;
                 background-color: #f0f0f0;
                 color: #333;
-                padding: 20px;
+                padding: 40px;
                 display: flex;
                 justify-content: center;
-                align-items: flex-start;
-            }
-
-            .main-container {
-                display: flex;
-                width: 100%;
-                max-width: 1200px;
-                gap: 20px;
             }
 
             .game-container {
-                flex-grow: 1;
+                width: 100%;
+                max-width: 800px;
                 background-color: #fff;
                 padding: 30px;
                 border-radius: 8px;
                 box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
                 position: relative;
-                /* Necessario per posizionare il loader */
-            }
-
-            .sidebar {
-                width: 300px;
-                background-color: #fff;
-                padding: 20px;
-                border-radius: 8px;
-                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-                position: sticky;
-                top: 20px;
             }
 
             h1 {
@@ -73,20 +55,6 @@
                 background-color: #ddd;
             }
 
-            .inventory-list {
-                list-style-type: none;
-                padding: 0;
-            }
-
-            .inventory-list li {
-                padding: 5px 0;
-                border-bottom: 1px solid #ddd;
-            }
-
-            .inventory-list li:last-child {
-                border-bottom: none;
-            }
-
             .back-link {
                 display: block;
                 text-align: center;
@@ -100,7 +68,6 @@
                 text-decoration: underline;
             }
 
-            /* 🟢 NUOVO: Stili per il loader */
             .loader-container {
                 position: absolute;
                 top: 0;
@@ -109,7 +76,6 @@
                 height: 100%;
                 background-color: rgba(255, 255, 255, 0.8);
                 display: none;
-                /* Inizialmente nascosto */
                 flex-direction: column;
                 justify-content: center;
                 align-items: center;
@@ -141,41 +107,79 @@
                     transform: rotate(360deg);
                 }
             }
+
+            /* 🟢 NUOVO: Stili per la barra degli HP */
+            .hp-bar {
+                text-align: center;
+                font-weight: bold;
+                margin-bottom: 20px;
+            }
+
+            .hp-progress {
+                background-color: #ddd;
+                border-radius: 10px;
+                height: 20px;
+                overflow: hidden;
+                border: 1px solid #aaa;
+            }
+
+            .hp-fill {
+                height: 100%;
+                background-color: #28a745;
+                transition: width 0.5s ease-in-out;
+            }
+
+            .hp-fill.critical {
+                background-color: #dc3545;
+            }
         </style>
     </head>
 
     <body>
-        <div class="main-container">
-            <div class="game-container">
-                <div id="loader-container" class="loader-container">
-                    <div class="loader"></div>
-                    <p class="loader-text">Ollamma sta pensando...</p>
-                </div>
-                <h1 id="adventure-title"></h1>
-                <div class="story-text">
-                    <p id="current-scene"></p>
-                </div>
-                <ul id="choices-container" class="choices-list"></ul>
-                <a href="/" class="back-link">Torna alla selezione delle avventure</a>
+        <div class="game-container">
+            <div id="loader-container" class="loader-container">
+                <div class="loader"></div>
+                <p class="loader-text">Ollamma sta pensando...</p>
             </div>
-            <div class="sidebar">
-                <h3>Inventario (Max 10)</h3>
-                <ul id="inventory-list" class="inventory-list"></ul>
+            <h1 id="adventure-title"></h1>
+            <div class="hp-bar">
+                <span>HP: <span id="hp-value"></span></span>
+                <div class="hp-progress">
+                    <div id="hp-fill" class="hp-fill"></div>
+                </div>
             </div>
+            <div class="story-text">
+                <p id="current-scene"></p>
+            </div>
+            <ul id="choices-container" class="choices-list"></ul>
+            <a href="/" class="back-link">Torna alla selezione delle avventure</a>
         </div>
 
         <script>
             const adventureTitle = "{{ title }}";
             const initialScene = `{{ scene | safe }}`;
             const initialChoices = JSON.parse('{{ choices | tojson | safe }}');
-            const initialInventory = JSON.parse('{{ inventory | tojson | safe }}');
+            const initialHp = "{{ current_hp }}";
 
             document.getElementById('adventure-title').innerText = adventureTitle;
             document.getElementById('current-scene').innerText = initialScene;
 
             const choicesContainer = document.getElementById('choices-container');
-            const inventoryList = document.getElementById('inventory-list');
             const loaderContainer = document.getElementById('loader-container');
+            const hpValue = document.getElementById('hp-value');
+            const hpFill = document.getElementById('hp-fill');
+            const MAX_HP = 20;
+
+            function updateHpBar(hp) {
+                hpValue.innerText = hp;
+                const percentage = (hp / MAX_HP) * 100;
+                hpFill.style.width = percentage + '%';
+                if (percentage <= 25) {
+                    hpFill.classList.add('critical');
+                } else {
+                    hpFill.classList.remove('critical');
+                }
+            }
 
             function renderChoices(choices) {
                 choicesContainer.innerHTML = '';
@@ -188,23 +192,7 @@
                 });
             }
 
-            function renderInventory(inventory) {
-                inventoryList.innerHTML = '';
-                if (inventory.length === 0) {
-                    const li = document.createElement('li');
-                    li.innerText = "Il tuo inventario è vuoto.";
-                    inventoryList.appendChild(li);
-                } else {
-                    inventory.forEach(item => {
-                        const li = document.createElement('li');
-                        li.innerText = item;
-                        inventoryList.appendChild(li);
-                    });
-                }
-            }
-
             async function makeChoice(choice) {
-                // 🟢 MOSTRA IL LOADER E NASCONDI LE OPZIONI
                 loaderContainer.style.display = 'flex';
                 choicesContainer.style.display = 'none';
 
@@ -221,15 +209,14 @@
                 const data = await response.json();
                 document.getElementById('current-scene').innerText = data.scene;
                 renderChoices(data.choices);
-                renderInventory(data.inventory);
+                updateHpBar(data.current_hp);
 
-                // 🟢 NASCONDI IL LOADER E MOSTRA LE NUOVE OPZIONI
                 loaderContainer.style.display = 'none';
                 choicesContainer.style.display = 'block';
             }
 
             renderChoices(initialChoices);
-            renderInventory(initialInventory);
+            updateHpBar(initialHp);
         </script>
     </body>
 

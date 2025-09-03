@@ -2,6 +2,7 @@ import requests
 import json
 import os
 import re
+import random
 from flask import Flask, render_template, request, jsonify, session
 from comfy_client import ComfyUIClient
 
@@ -9,10 +10,12 @@ from comfy_client import ComfyUIClient
 OLLAMA_SERVER_URL = "http://192.168.1.115:11434"
 COMFYUI_SERVER_ADDRESS = "192.168.1.115:8188"
 MODEL_NAME = "playground-v2.5-1024px-aesthetic.fp16.safetensors"
+MAX_SCENES = 15
+INITIAL_HP = 20
 
 # Inizializza l'applicazione Flask e il client di ComfyUI
 app = Flask(__name__)
-app.secret_key = 'la_tua_chiave_segreta_molto_difficile'
+app.secret_key = 'la_tua_chiave_segreta_molto_difficile' 
 
 try:
     from comfy_client import ComfyUIClient
@@ -79,6 +82,50 @@ def generate_and_save_image(title, ambientazione, trama):
         print(f"🚨 Errore durante la generazione dell'immagine con ComfyUI: {e}")
         return None
 
+# Funzione per gestire il combattimento
+def handle_combat():
+    player_roll = random.randint(1, 20)
+    monster_roll = random.randint(1, 20)
+    
+    player_hp = session.get('current_hp', INITIAL_HP)
+    
+    combat_log = []
+    
+    if player_roll >= monster_roll:
+        damage = 0
+        if player_roll > monster_roll:
+            damage = player_roll - monster_roll
+            if player_roll == 20: # Colpo critico
+                damage = 5 + random.randint(1, 4)
+            combat_log.append(f"Hai attaccato! Il tuo D20 è {player_roll}, il mostro è {monster_roll}. Infliggi {damage} danni.")
+            session['current_monster_hp'] -= damage
+        else: # Pareggio
+            combat_log.append(f"Pareggio! Il tuo D20 è {player_roll}, il mostro è {monster_roll}. Nessuno subisce danni.")
+    else:
+        damage = monster_roll - player_roll
+        if monster_roll == 20: # Colpo critico del mostro
+            damage = 5 + random.randint(1, 4)
+        combat_log.append(f"Il mostro ti ha attaccato! Il tuo D20 è {player_roll}, il mostro è {monster_roll}. Subisci {damage} danni.")
+        player_hp -= damage
+
+    session['current_hp'] = player_hp
+    
+    return combat_log
+
+# Funzione per verificare la condizione di sconfitta
+def check_death():
+    if session.get('current_hp', 0) <= 0:
+        session.clear()
+        return True
+    return False
+
+# Funzione per verificare la condizione di vittoria
+def check_victory():
+    if session.get('current_scene_number', 0) >= MAX_SCENES:
+        session.clear()
+        return True
+    return False
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -132,15 +179,22 @@ def start_adventure(title):
     session.clear()
     session['adventure_title'] = title
     session['history'] = []
-    session['inventory'] = []
+    session['current_hp'] = INITIAL_HP
+    session['current_scene_number'] = 1
+    session['monsters_encountered'] = []
     
     start_prompt = f"""
-Inizia un'avventura a scelte multiple in stile D&D basata su: '{title}'. 
-Presenta la situazione iniziale e offri 3 opzioni numerate per il giocatore.
+Sei il Game Master di un'avventura di Dungeons & Dragons.
+L'avventura è basata su: '{title}'. 
+Descrivi la situazione iniziale. A volte, includi la possibilità di incontrare un mostro.
+Le opzioni di scelta devono essere 3. Se incontri un mostro, aggiungi l'opzione "Attacca il mostro".
 Usa ESATTAMENTE questo formato per la tua risposta:
 
 SCENA:
-[Descrivi qui la situazione iniziale in modo dettagliato, integrare la possibilità di trovare un oggetto in una delle scelte.]
+[Descrivi qui la situazione iniziale in modo dettagliato]
+
+MOSTRO:
+[Nome del mostro, es. "Goblin". Lascia vuoto se non c'è.]
 
 SCELTE:
 1. [Prima opzione]
@@ -148,11 +202,16 @@ SCELTE:
 3. [Terza opzione]
 """
     game_text = generate_single_scenario(start_prompt)
-    scene, choices = parse_game_response(game_text)
+    scene, monster, choices = parse_game_response(game_text)
+    
+    if monster:
+        session['current_monster'] = monster
+        session['current_monster_hp'] = 10
+        choices.append("4. Attacca il mostro")
     
     session['history'].append({'scene': scene, 'choices': choices})
     
-    return render_template('game.html', title=title, scene=scene, choices=choices, inventory=session['inventory'])
+    return render_template('game.html', title=title, scene=scene, choices=choices, current_hp=session['current_hp'])
 
 @app.route('/continue_adventure', methods=['POST'])
 def continue_adventure():
@@ -160,82 +219,75 @@ def continue_adventure():
     choice_made = data.get('choice')
     
     title = session.get('adventure_title')
-    current_inventory = session.get('inventory', [])
-
-    # 🟢 NUOVA LOGICA: Gestione della scelta dell'inventario
-    item_pattern = re.search(r'(Raccogli|Prendi)\s+l\'?(\w+)', choice_made, re.IGNORECASE)
+    current_hp = session.get('current_hp')
+    current_scene_number = session.get('current_scene_number')
+    history = session.get('history', [])
     
-    # Se la scelta è di prendere un oggetto
-    if item_pattern:
-        item_name = item_pattern.group(2).strip()
-        if len(current_inventory) >= 10:
-            scene = f"Non puoi raccogliere {item_name}. Il tuo inventario è pieno (10 oggetti). Scegli quale oggetto scartare o lascia perdere."
-            choices = [f"Scarta {obj}" for obj in current_inventory] + [f"Lascia {item_name} dove si trova"]
-            return jsonify({"scene": scene, "choices": choices, "inventory": current_inventory})
-        else:
-            current_inventory.append(item_name)
-            
-            # Genera nuova scena che continua dopo la raccolta
+    # 🟢 Logica di fine gioco
+    if check_death():
+        return jsonify({"scene": "Sei morto! L'avventura è finita. Riprova da capo.", "choices": ["Ricomincia"], "current_hp": 0})
+    
+    if check_victory():
+        return jsonify({"scene": "Hai completato la missione! L'avventura è finita.", "choices": ["Ricomincia"], "current_hp": current_hp})
+
+    # 🟢 Logica di combattimento
+    if "Attacca il mostro" in choice_made:
+        combat_log = handle_combat()
+        monster = session['current_monster']
+        monster_hp = session['current_monster_hp']
+        
+        if monster_hp <= 0:
+            del session['current_monster']
+            del session['current_monster_hp']
+            scene = f"Hai sconfitto il {monster}! {'. '.join(combat_log)} Cosa fai ora?"
             next_prompt = f"""
-            L'inventario del giocatore è ora: {', '.join(current_inventory)}.
-            Il giocatore ha appena scelto di raccogliere '{item_name}'.
-            Continua la narrazione da dove si era interrotta con una nuova scena e 3 opzioni.
+            Il giocatore ha sconfitto il {monster}. Continua la narrazione con una nuova scena e 3 opzioni.
             
             SCENA:
-            [Descrivi qui la nuova situazione in modo dettagliato]
-
+            [Descrivi qui la nuova situazione]
+            
+            MOSTRO:
+            
             SCELTE:
             1. [Prima opzione]
             2. [Seconda opzione]
             3. [Terza opzione]
             """
             game_text = generate_single_scenario(next_prompt)
-            scene, choices = parse_game_response(game_text)
-    
-    # Se la scelta è di scartare un oggetto per far posto a uno nuovo
-    elif re.search(r'Scarta\s+(\w+)', choice_made, re.IGNORECASE):
-        item_to_drop = re.search(r'Scarta\s+(\w+)', choice_made, re.IGNORECASE).group(1)
-        new_item = session.get('new_item')
-        current_inventory.remove(item_to_drop)
-        current_inventory.append(new_item)
-        del session['new_item']
+            new_scene, new_monster, choices = parse_game_response(game_text)
+            
+            if new_monster:
+                session['current_monster'] = new_monster
+                session['current_monster_hp'] = 10
+                choices.append("4. Attacca il mostro")
+            
+            scene += new_scene
+            
+        else:
+            scene = f"Il combattimento continua! {'. '.join(combat_log)} Il {monster} ha {monster_hp} HP rimasti. Cosa fai?"
+            choices = ["Attacca il mostro", "Tenta di fuggire"]
         
-        next_prompt = f"""
-        L'inventario del giocatore è ora: {', '.join(current_inventory)}.
-        Il giocatore ha scartato '{item_to_drop}' per prendere '{new_item}'.
-        Continua la narrazione da dove si era interrotta con una nuova scena e 3 opzioni.
-        
-        SCENA:
-        [Descrivi qui la nuova situazione in modo dettagliato]
-
-        SCELTE:
-        1. [Prima opzione]
-        2. [Seconda opzione]
-        3. [Terza opzione]
-        """
-        game_text = generate_single_scenario(next_prompt)
-        scene, choices = parse_game_response(game_text)
-
-    # Logica standard per proseguire la storia (senza interazioni con l'inventario)
+        session['current_hp'] = session['current_hp']
     else:
-        history = session.get('history', [])
+        # Logica standard per proseguire la storia
         story_history = ""
         for entry in history:
             story_history += f"SCENA:\n{entry['scene']}\n"
             story_history += "SCELTE:\n" + "\n".join(entry['choices']) + "\n\n"
             
-        inventory_prompt = f"Inventario attuale: {', '.join(current_inventory)}" if current_inventory else "Inventario attuale: vuoto"
-        
         next_prompt = f"""
         Basato sulla seguente cronologia dell'avventura '{title}':
         {story_history}
-        {inventory_prompt}
+
         Il giocatore ha appena scelto: '{choice_made}'.
-        Continua la narrazione con una nuova scena e offri 3 nuove opzioni.
+        Continua la narrazione con una nuova scena e offri 3 nuove opzioni. A volte includi la possibilità di incontrare un mostro.
         Usa ESATTAMENTE questo formato per la tua risposta:
 
         SCENA:
         [Descrivi qui la nuova situazione in modo dettagliato]
+
+        MOSTRO:
+        [Nome del mostro, es. "Goblin". Lascia vuoto se non c'è.]
 
         SCELTE:
         1. [Prima opzione]
@@ -243,23 +295,37 @@ def continue_adventure():
         3. [Terza opzione]
         """
         game_text = generate_single_scenario(next_prompt)
-        scene, choices = parse_game_response(game_text)
+        scene, monster, choices = parse_game_response(game_text)
+        
+        if monster:
+            session['current_monster'] = monster
+            session['current_monster_hp'] = 10
+            choices.append("4. Attacca il mostro")
+        
+        # Incrementa il numero di scena
+        session['current_scene_number'] += 1
     
-    session['inventory'] = current_inventory
     session['history'].append({'scene': scene, 'choices': choices})
     
-    return jsonify({"scene": scene, "choices": choices, "inventory": current_inventory})
+    return jsonify({"scene": scene, "choices": choices, "current_hp": session['current_hp']})
 
 def parse_game_response(text):
-    scene_match = re.search(r'SCENA:\s*([\s\S]*?)\s*SCELTE:', text, re.DOTALL)
+    scene_match = re.search(r'SCENA:\s*([\s\S]*?)\s*(MOSTRO:|SCELTE:)', text, re.DOTALL)
+    monster_match = re.search(r'MOSTRO:\s*([\s\S]*?)\s*SCELTE:', text, re.DOTALL)
     choices_match = re.search(r'SCELTE:\s*([\s\S]*)', text, re.DOTALL)
 
     scene = "Descrizione non trovata. Riprova. Probabilmente Ollama si è interrotto."
+    monster = None
     choices = ["Scelte non trovate. Riprova."]
     
     if scene_match:
         scene = scene_match.group(1).strip()
     
+    if monster_match:
+        monster_text = monster_match.group(1).strip()
+        if monster_text and monster_text.lower() not in ["vuoto", "nessuno", "nessun mostro"]:
+            monster = monster_text
+
     if choices_match:
         choices_text = choices_match.group(1).strip()
         choices = [c.strip() for c in choices_text.split('\n') if c.strip()]
@@ -267,7 +333,7 @@ def parse_game_response(text):
     if not choices:
         choices = ["Scelte non trovate. Riprova."]
 
-    return scene, choices
+    return scene, monster, choices
 
 if __name__ == '__main__':
     app.run(debug=True)
