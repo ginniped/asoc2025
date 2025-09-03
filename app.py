@@ -140,10 +140,7 @@ Presenta la situazione iniziale e offri 3 opzioni numerate per il giocatore.
 Usa ESATTAMENTE questo formato per la tua risposta:
 
 SCENA:
-[Descrivi qui la situazione iniziale in modo dettagliato]
-
-OGGETTO:
-[Nome dell'oggetto collezionabile, uno per scena. Lascia vuoto se non ce ne sono.]
+[Descrivi qui la situazione iniziale in modo dettagliato, integrare la possibilità di trovare un oggetto in una delle scelte.]
 
 SCELTE:
 1. [Prima opzione]
@@ -151,12 +148,7 @@ SCELTE:
 3. [Terza opzione]
 """
     game_text = generate_single_scenario(start_prompt)
-    scene, item, choices = parse_game_response(game_text)
-    
-    if item:
-        session['found_item'] = item
-        scene = f"Hai trovato un oggetto: '{item}'. Cosa vuoi fare?"
-        choices = ["Raccogli l'oggetto", "Lascia l'oggetto dove si trova"]
+    scene, choices = parse_game_response(game_text)
     
     session['history'].append({'scene': scene, 'choices': choices})
     
@@ -168,94 +160,29 @@ def continue_adventure():
     choice_made = data.get('choice')
     
     title = session.get('adventure_title')
-    history = session.get('history', [])
     current_inventory = session.get('inventory', [])
-    
-    # Logica per la modalità di scambio di oggetti
-    if "swap-mode" in session:
-        item_to_remove = choice_made
-        new_item = session['new_item']
-        
-        if item_to_remove != "Scarta il nuovo oggetto":
-            current_inventory.remove(item_to_remove)
-            current_inventory.append(new_item)
-        
-        del session['swap-mode']
-        del session['new_item']
-        
-        next_prompt = f"""
-        Dopo lo scambio, il giocatore ha proseguito l'avventura. L'inventario è ora: {', '.join(current_inventory)}.
-        Continua la narrazione con una nuova scena e 3 opzioni.
-        
-        SCENA:
-        [Descrivi qui la nuova situazione]
-        
-        OGGETTO:
-        [Nome di un nuovo oggetto, se presente. Lascia vuoto se non ce ne sono.]
-        
-        SCELTE:
-        1. [Prima opzione]
-        2. [Seconda opzione]
-        3. [Terza opzione]
-        """
-        game_text = generate_single_scenario(next_prompt)
-        scene, item, choices = parse_game_response(game_text)
-    
-    # Nuova logica per la scelta di un oggetto trovato
-    elif "found_item" in session:
-        item = session['found_item']
-        
-        if choice_made == "Raccogli l'oggetto":
-            if len(current_inventory) >= 10:
-                session['swap-mode'] = True
-                session['new_item'] = item
-                
-                scene = f"Hai trovato un nuovo oggetto: '{item}', ma il tuo inventario è pieno. Scegli cosa scartare per prenderlo o scartalo."
-                choices = current_inventory + ["Scarta il nuovo oggetto"]
-            else:
-                current_inventory.append(item)
-                # Genera nuova scena che continua dopo la raccolta
-                next_prompt = f"""
-                Il giocatore ha raccolto '{item}'. L'inventario è ora: {', '.join(current_inventory)}.
-                Continua la narrazione con una nuova scena e 3 opzioni.
-                SCENA:
-                [Descrivi qui la nuova situazione]
-                OGGETTO:
-                [Nome di un nuovo oggetto, se presente. Lascia vuoto se non ce ne sono.]
-                SCELTE:
-                1. [Prima opzione]
-                2. [Seconda opzione]
-                3. [Terza opzione]
-                """
-                game_text = generate_single_scenario(next_prompt)
-                scene, next_item, choices = parse_game_response(game_text)
-                if next_item:
-                    # In teoria potremmo avere due oggetti di fila, ma la logica è per uno per volta.
-                    # Questa è una semplificazione per evitare un loop infinito.
-                    # Se il modello ne suggerisce un altro, lo ignoriamo per ora.
-                    pass
-        
-        del session['found_item']
-        
-        # Se il giocatore ha scelto di non raccogliere, continuiamo la storia come se nulla fosse
-        if choice_made == "Lascia l'oggetto dove si trova":
-            story_history = ""
-            for entry in history:
-                story_history += f"SCENA:\n{entry['scene']}\n"
-                story_history += "SCELTE:\n" + "\n".join(entry['choices']) + "\n\n"
-                
-            next_prompt = f"""
-            Basato sulla seguente cronologia dell'avventura '{title}':
-            {story_history}
 
-            Il giocatore ha deciso di non raccogliere l'oggetto.
-            Continua la narrazione con una nuova scena e offri 3 nuove opzioni.
+    # 🟢 NUOVA LOGICA: Gestione della scelta dell'inventario
+    item_pattern = re.search(r'(Raccogli|Prendi)\s+l\'?(\w+)', choice_made, re.IGNORECASE)
+    
+    # Se la scelta è di prendere un oggetto
+    if item_pattern:
+        item_name = item_pattern.group(2).strip()
+        if len(current_inventory) >= 10:
+            scene = f"Non puoi raccogliere {item_name}. Il tuo inventario è pieno (10 oggetti). Scegli quale oggetto scartare o lascia perdere."
+            choices = [f"Scarta {obj}" for obj in current_inventory] + [f"Lascia {item_name} dove si trova"]
+            return jsonify({"scene": scene, "choices": choices, "inventory": current_inventory})
+        else:
+            current_inventory.append(item_name)
+            
+            # Genera nuova scena che continua dopo la raccolta
+            next_prompt = f"""
+            L'inventario del giocatore è ora: {', '.join(current_inventory)}.
+            Il giocatore ha appena scelto di raccogliere '{item_name}'.
+            Continua la narrazione da dove si era interrotta con una nuova scena e 3 opzioni.
             
             SCENA:
             [Descrivi qui la nuova situazione in modo dettagliato]
-
-            OGGETTO:
-            [Nome dell'oggetto collezionabile, uno per scena. Lascia vuoto se non ce ne sono.]
 
             SCELTE:
             1. [Prima opzione]
@@ -263,14 +190,35 @@ def continue_adventure():
             3. [Terza opzione]
             """
             game_text = generate_single_scenario(next_prompt)
-            scene, item, choices = parse_game_response(game_text)
-            if item:
-                session['found_item'] = item
-                scene = f"Hai trovato un oggetto: '{item}'. Cosa vuoi fare?"
-                choices = ["Raccogli l'oggetto", "Lascia l'oggetto dove si trova"]
+            scene, choices = parse_game_response(game_text)
     
-    # Logica normale per proseguire la storia
+    # Se la scelta è di scartare un oggetto per far posto a uno nuovo
+    elif re.search(r'Scarta\s+(\w+)', choice_made, re.IGNORECASE):
+        item_to_drop = re.search(r'Scarta\s+(\w+)', choice_made, re.IGNORECASE).group(1)
+        new_item = session.get('new_item')
+        current_inventory.remove(item_to_drop)
+        current_inventory.append(new_item)
+        del session['new_item']
+        
+        next_prompt = f"""
+        L'inventario del giocatore è ora: {', '.join(current_inventory)}.
+        Il giocatore ha scartato '{item_to_drop}' per prendere '{new_item}'.
+        Continua la narrazione da dove si era interrotta con una nuova scena e 3 opzioni.
+        
+        SCENA:
+        [Descrivi qui la nuova situazione in modo dettagliato]
+
+        SCELTE:
+        1. [Prima opzione]
+        2. [Seconda opzione]
+        3. [Terza opzione]
+        """
+        game_text = generate_single_scenario(next_prompt)
+        scene, choices = parse_game_response(game_text)
+
+    # Logica standard per proseguire la storia (senza interazioni con l'inventario)
     else:
+        history = session.get('history', [])
         story_history = ""
         for entry in history:
             story_history += f"SCENA:\n{entry['scene']}\n"
@@ -281,19 +229,13 @@ def continue_adventure():
         next_prompt = f"""
         Basato sulla seguente cronologia dell'avventura '{title}':
         {story_history}
-
         {inventory_prompt}
-
         Il giocatore ha appena scelto: '{choice_made}'.
         Continua la narrazione con una nuova scena e offri 3 nuove opzioni.
-        Puoi menzionare un oggetto collezionabile nella scena.
         Usa ESATTAMENTE questo formato per la tua risposta:
 
         SCENA:
         [Descrivi qui la nuova situazione in modo dettagliato]
-
-        OGGETTO:
-        [Nome dell'oggetto collezionabile, uno per scena. Lascia vuoto se non ce ne sono.]
 
         SCELTE:
         1. [Prima opzione]
@@ -301,36 +243,23 @@ def continue_adventure():
         3. [Terza opzione]
         """
         game_text = generate_single_scenario(next_prompt)
-        scene, item, choices = parse_game_response(game_text)
-        
-        if item:
-            session['found_item'] = item
-            scene = f"Hai trovato un oggetto: '{item}'. Cosa vuoi fare?"
-            choices = ["Raccogli l'oggetto", "Lascia l'oggetto dove si trova"]
-
-    history.append({'scene': scene, 'choices': choices})
-    session['history'] = history
+        scene, choices = parse_game_response(game_text)
+    
     session['inventory'] = current_inventory
+    session['history'].append({'scene': scene, 'choices': choices})
     
     return jsonify({"scene": scene, "choices": choices, "inventory": current_inventory})
 
 def parse_game_response(text):
-    scene_match = re.search(r'SCENA:\s*([\s\S]*?)\s*(OGGETTO:|SCELTE:)', text, re.DOTALL)
-    item_match = re.search(r'OGGETTO:\s*([\s\S]*?)\s*SCELTE:', text, re.DOTALL)
+    scene_match = re.search(r'SCENA:\s*([\s\S]*?)\s*SCELTE:', text, re.DOTALL)
     choices_match = re.search(r'SCELTE:\s*([\s\S]*)', text, re.DOTALL)
 
     scene = "Descrizione non trovata. Riprova. Probabilmente Ollama si è interrotto."
-    item = None
     choices = ["Scelte non trovate. Riprova."]
     
     if scene_match:
         scene = scene_match.group(1).strip()
     
-    if item_match:
-        item_text = item_match.group(1).strip()
-        if item_text and item_text.lower() not in ["vuoto", "nessuno", "nessun oggetto"]:
-            item = item_text
-
     if choices_match:
         choices_text = choices_match.group(1).strip()
         choices = [c.strip() for c in choices_text.split('\n') if c.strip()]
@@ -338,7 +267,7 @@ def parse_game_response(text):
     if not choices:
         choices = ["Scelte non trovate. Riprova."]
 
-    return scene, item, choices
+    return scene, choices
 
 if __name__ == '__main__':
     app.run(debug=True)
