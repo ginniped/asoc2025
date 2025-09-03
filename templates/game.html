@@ -10,16 +10,37 @@
                 font-family: 'Arial', sans-serif;
                 background-color: #f0f0f0;
                 color: #333;
-                padding: 40px;
+                padding: 20px;
+                display: flex;
+                justify-content: center;
+                align-items: flex-start;
+            }
+
+            .main-container {
+                display: flex;
+                width: 100%;
+                max-width: 1200px;
+                gap: 20px;
             }
 
             .game-container {
-                max-width: 800px;
-                margin: 0 auto;
+                flex-grow: 1;
                 background-color: #fff;
                 padding: 30px;
                 border-radius: 8px;
                 box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+                position: relative;
+                /* Necessario per posizionare il loader */
+            }
+
+            .sidebar {
+                width: 300px;
+                background-color: #fff;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+                position: sticky;
+                top: 20px;
             }
 
             h1 {
@@ -52,6 +73,20 @@
                 background-color: #ddd;
             }
 
+            .inventory-list {
+                list-style-type: none;
+                padding: 0;
+            }
+
+            .inventory-list li {
+                padding: 5px 0;
+                border-bottom: 1px solid #ddd;
+            }
+
+            .inventory-list li:last-child {
+                border-bottom: none;
+            }
+
             .back-link {
                 display: block;
                 text-align: center;
@@ -64,29 +99,83 @@
             .back-link:hover {
                 text-decoration: underline;
             }
+
+            /* 🟢 NUOVO: Stili per il loader */
+            .loader-container {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(255, 255, 255, 0.8);
+                display: none;
+                /* Inizialmente nascosto */
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                z-index: 10;
+                transition: opacity 0.3s;
+            }
+
+            .loader {
+                border: 8px solid #f3f3f3;
+                border-top: 8px solid #4CAF50;
+                border-radius: 50%;
+                width: 60px;
+                height: 60px;
+                animation: spin 2s linear infinite;
+            }
+
+            .loader-text {
+                margin-top: 15px;
+                color: #555;
+                font-size: 1.1em;
+            }
+
+            @keyframes spin {
+                0% {
+                    transform: rotate(0deg);
+                }
+
+                100% {
+                    transform: rotate(360deg);
+                }
+            }
         </style>
     </head>
 
     <body>
-        <div class="game-container">
-            <h1 id="adventure-title"></h1>
-            <div class="story-text">
-                <p id="current-scene"></p>
+        <div class="main-container">
+            <div class="game-container">
+                <div id="loader-container" class="loader-container">
+                    <div class="loader"></div>
+                    <p class="loader-text">Ollamma sta pensando...</p>
+                </div>
+                <h1 id="adventure-title"></h1>
+                <div class="story-text">
+                    <p id="current-scene"></p>
+                </div>
+                <ul id="choices-container" class="choices-list"></ul>
+                <a href="/" class="back-link">Torna alla selezione delle avventure</a>
             </div>
-            <ul id="choices-container" class="choices-list">
-            </ul>
-            <a href="/" class="back-link">Torna alla selezione delle avventure</a>
+            <div class="sidebar">
+                <h3>Inventario (Max 10)</h3>
+                <ul id="inventory-list" class="inventory-list"></ul>
+            </div>
         </div>
 
         <script>
             const adventureTitle = "{{ title }}";
             const initialScene = `{{ scene | safe }}`;
             const initialChoices = JSON.parse('{{ choices | tojson | safe }}');
+            const initialInventory = JSON.parse('{{ inventory | tojson | safe }}');
 
             document.getElementById('adventure-title').innerText = adventureTitle;
             document.getElementById('current-scene').innerText = initialScene;
 
             const choicesContainer = document.getElementById('choices-container');
+            const inventoryList = document.getElementById('inventory-list');
+            const loaderContainer = document.getElementById('loader-container');
 
             function renderChoices(choices) {
                 choicesContainer.innerHTML = '';
@@ -99,14 +188,32 @@
                 });
             }
 
+            function renderInventory(inventory) {
+                inventoryList.innerHTML = '';
+                if (inventory.length === 0) {
+                    const li = document.createElement('li');
+                    li.innerText = "Il tuo inventario è vuoto.";
+                    inventoryList.appendChild(li);
+                } else {
+                    inventory.forEach(item => {
+                        const li = document.createElement('li');
+                        li.innerText = item;
+                        inventoryList.appendChild(li);
+                    });
+                }
+            }
+
             async function makeChoice(choice) {
+                // 🟢 MOSTRA IL LOADER E NASCONDI LE OPZIONI
+                loaderContainer.style.display = 'flex';
+                choicesContainer.style.display = 'none';
+
                 const response = await fetch('/continue_adventure', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        title: adventureTitle,
                         choice: choice
                     })
                 });
@@ -114,10 +221,15 @@
                 const data = await response.json();
                 document.getElementById('current-scene').innerText = data.scene;
                 renderChoices(data.choices);
+                renderInventory(data.inventory);
+
+                // 🟢 NASCONDI IL LOADER E MOSTRA LE NUOVE OPZIONI
+                loaderContainer.style.display = 'none';
+                choicesContainer.style.display = 'block';
             }
 
-            // Renderizza le scelte iniziali
             renderChoices(initialChoices);
+            renderInventory(initialInventory);
         </script>
     </body>
 

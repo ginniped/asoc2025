@@ -2,7 +2,7 @@ import requests
 import json
 import os
 import re
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, session
 from comfy_client import ComfyUIClient
 
 # --- Configurazione dei server ---
@@ -12,9 +12,15 @@ MODEL_NAME = "playground-v2.5-1024px-aesthetic.fp16.safetensors"
 
 # Inizializza l'applicazione Flask e il client di ComfyUI
 app = Flask(__name__)
-comfy_client = ComfyUIClient(COMFYUI_SERVER_ADDRESS)
+app.secret_key = 'la_tua_chiave_segreta_molto_difficile'
 
-# Funzione per generare un singolo scenario con Ollama
+try:
+    from comfy_client import ComfyUIClient
+    comfy_client = ComfyUIClient(COMFYUI_SERVER_ADDRESS)
+except ImportError:
+    print("La libreria 'comfy_client' non è installata. Le funzionalità di generazione immagini non saranno disponibili.")
+    comfy_client = None
+
 def generate_single_scenario(prompt, model="llama3.1:8b"):
     payload = {
         "model": model,
@@ -34,6 +40,9 @@ def generate_single_scenario(prompt, model="llama3.1:8b"):
         return "Errore nella decodifica JSON da Ollama."
 
 def generate_and_save_image(title, ambientazione, trama):
+    if not comfy_client:
+        return None
+
     positive_prompt = f"Fantasy illustration of a D&D adventure: {title}. The setting is {ambientazione}. The quest involves: {trama}. High detail, cinematic lighting, dramatic atmosphere."
     negative_prompt = "(worst quality, low quality, normal quality), blurry, ugly, disfigured, watermark, text, signature, plain background"
     
@@ -70,7 +79,6 @@ def generate_and_save_image(title, ambientazione, trama):
         print(f"🚨 Errore durante la generazione dell'immagine con ComfyUI: {e}")
         return None
 
-# Rotta principale che renderizza la pagina web
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -119,10 +127,13 @@ Non includere introduzioni, conclusioni o testo aggiuntivo. Non usare caratteri 
     
     return render_template('results.html', scenarios=scenarios_data)
 
-# Nota: ho modificato la rotta in <path:title> per gestire titoli con caratteri speciali
 @app.route('/adventure/<path:title>')
 def start_adventure(title):
-    # Prompt per il gioco iniziale, con istruzioni chiare per Ollama
+    session.clear()
+    session['adventure_title'] = title
+    session['history'] = []
+    session['inventory'] = []
+    
     start_prompt = f"""
 Inizia un'avventura a scelte multiple in stile D&D basata su: '{title}'. 
 Presenta la situazione iniziale e offri 3 opzioni numerate per il giocatore.
@@ -131,57 +142,203 @@ Usa ESATTAMENTE questo formato per la tua risposta:
 SCENA:
 [Descrivi qui la situazione iniziale in modo dettagliato]
 
+OGGETTO:
+[Nome dell'oggetto collezionabile, uno per scena. Lascia vuoto se non ce ne sono.]
+
 SCELTE:
 1. [Prima opzione]
 2. [Seconda opzione]
 3. [Terza opzione]
 """
     game_text = generate_single_scenario(start_prompt)
-    scene, choices = parse_game_response(game_text)
+    scene, item, choices = parse_game_response(game_text)
     
-    return render_template('game.html', title=title, scene=scene, choices=choices)
+    if item:
+        session['found_item'] = item
+        scene = f"Hai trovato un oggetto: '{item}'. Cosa vuoi fare?"
+        choices = ["Raccogli l'oggetto", "Lascia l'oggetto dove si trova"]
+    
+    session['history'].append({'scene': scene, 'choices': choices})
+    
+    return render_template('game.html', title=title, scene=scene, choices=choices, inventory=session['inventory'])
 
 @app.route('/continue_adventure', methods=['POST'])
 def continue_adventure():
     data = request.json
-    title = data.get('title')
     choice_made = data.get('choice')
-
-    # Prompt per continuare l'avventura
-    next_prompt = f"""
-Nell'avventura '{title}', il giocatore ha scelto: '{choice_made}'.
-Continua la narrazione con una nuova scena e offri 3 nuove opzioni.
-Usa ESATTAMENTE questo formato per la tua risposta:
-
-SCENA:
-[Descrivi qui la nuova situazione in modo dettagliato]
-
-SCELTE:
-1. [Prima opzione]
-2. [Seconda opzione]
-3. [Terza opzione]
-"""
-    game_text = generate_single_scenario(next_prompt)
-    scene, choices = parse_game_response(game_text)
     
-    return jsonify({"scene": scene, "choices": choices})
+    title = session.get('adventure_title')
+    history = session.get('history', [])
+    current_inventory = session.get('inventory', [])
+    
+    # Logica per la modalità di scambio di oggetti
+    if "swap-mode" in session:
+        item_to_remove = choice_made
+        new_item = session['new_item']
+        
+        if item_to_remove != "Scarta il nuovo oggetto":
+            current_inventory.remove(item_to_remove)
+            current_inventory.append(new_item)
+        
+        del session['swap-mode']
+        del session['new_item']
+        
+        next_prompt = f"""
+        Dopo lo scambio, il giocatore ha proseguito l'avventura. L'inventario è ora: {', '.join(current_inventory)}.
+        Continua la narrazione con una nuova scena e 3 opzioni.
+        
+        SCENA:
+        [Descrivi qui la nuova situazione]
+        
+        OGGETTO:
+        [Nome di un nuovo oggetto, se presente. Lascia vuoto se non ce ne sono.]
+        
+        SCELTE:
+        1. [Prima opzione]
+        2. [Seconda opzione]
+        3. [Terza opzione]
+        """
+        game_text = generate_single_scenario(next_prompt)
+        scene, item, choices = parse_game_response(game_text)
+    
+    # Nuova logica per la scelta di un oggetto trovato
+    elif "found_item" in session:
+        item = session['found_item']
+        
+        if choice_made == "Raccogli l'oggetto":
+            if len(current_inventory) >= 10:
+                session['swap-mode'] = True
+                session['new_item'] = item
+                
+                scene = f"Hai trovato un nuovo oggetto: '{item}', ma il tuo inventario è pieno. Scegli cosa scartare per prenderlo o scartalo."
+                choices = current_inventory + ["Scarta il nuovo oggetto"]
+            else:
+                current_inventory.append(item)
+                # Genera nuova scena che continua dopo la raccolta
+                next_prompt = f"""
+                Il giocatore ha raccolto '{item}'. L'inventario è ora: {', '.join(current_inventory)}.
+                Continua la narrazione con una nuova scena e 3 opzioni.
+                SCENA:
+                [Descrivi qui la nuova situazione]
+                OGGETTO:
+                [Nome di un nuovo oggetto, se presente. Lascia vuoto se non ce ne sono.]
+                SCELTE:
+                1. [Prima opzione]
+                2. [Seconda opzione]
+                3. [Terza opzione]
+                """
+                game_text = generate_single_scenario(next_prompt)
+                scene, next_item, choices = parse_game_response(game_text)
+                if next_item:
+                    # In teoria potremmo avere due oggetti di fila, ma la logica è per uno per volta.
+                    # Questa è una semplificazione per evitare un loop infinito.
+                    # Se il modello ne suggerisce un altro, lo ignoriamo per ora.
+                    pass
+        
+        del session['found_item']
+        
+        # Se il giocatore ha scelto di non raccogliere, continuiamo la storia come se nulla fosse
+        if choice_made == "Lascia l'oggetto dove si trova":
+            story_history = ""
+            for entry in history:
+                story_history += f"SCENA:\n{entry['scene']}\n"
+                story_history += "SCELTE:\n" + "\n".join(entry['choices']) + "\n\n"
+                
+            next_prompt = f"""
+            Basato sulla seguente cronologia dell'avventura '{title}':
+            {story_history}
 
-# Funzione per estrarre scena e scelte in modo robusto
+            Il giocatore ha deciso di non raccogliere l'oggetto.
+            Continua la narrazione con una nuova scena e offri 3 nuove opzioni.
+            
+            SCENA:
+            [Descrivi qui la nuova situazione in modo dettagliato]
+
+            OGGETTO:
+            [Nome dell'oggetto collezionabile, uno per scena. Lascia vuoto se non ce ne sono.]
+
+            SCELTE:
+            1. [Prima opzione]
+            2. [Seconda opzione]
+            3. [Terza opzione]
+            """
+            game_text = generate_single_scenario(next_prompt)
+            scene, item, choices = parse_game_response(game_text)
+            if item:
+                session['found_item'] = item
+                scene = f"Hai trovato un oggetto: '{item}'. Cosa vuoi fare?"
+                choices = ["Raccogli l'oggetto", "Lascia l'oggetto dove si trova"]
+    
+    # Logica normale per proseguire la storia
+    else:
+        story_history = ""
+        for entry in history:
+            story_history += f"SCENA:\n{entry['scene']}\n"
+            story_history += "SCELTE:\n" + "\n".join(entry['choices']) + "\n\n"
+            
+        inventory_prompt = f"Inventario attuale: {', '.join(current_inventory)}" if current_inventory else "Inventario attuale: vuoto"
+        
+        next_prompt = f"""
+        Basato sulla seguente cronologia dell'avventura '{title}':
+        {story_history}
+
+        {inventory_prompt}
+
+        Il giocatore ha appena scelto: '{choice_made}'.
+        Continua la narrazione con una nuova scena e offri 3 nuove opzioni.
+        Puoi menzionare un oggetto collezionabile nella scena.
+        Usa ESATTAMENTE questo formato per la tua risposta:
+
+        SCENA:
+        [Descrivi qui la nuova situazione in modo dettagliato]
+
+        OGGETTO:
+        [Nome dell'oggetto collezionabile, uno per scena. Lascia vuoto se non ce ne sono.]
+
+        SCELTE:
+        1. [Prima opzione]
+        2. [Seconda opzione]
+        3. [Terza opzione]
+        """
+        game_text = generate_single_scenario(next_prompt)
+        scene, item, choices = parse_game_response(game_text)
+        
+        if item:
+            session['found_item'] = item
+            scene = f"Hai trovato un oggetto: '{item}'. Cosa vuoi fare?"
+            choices = ["Raccogli l'oggetto", "Lascia l'oggetto dove si trova"]
+
+    history.append({'scene': scene, 'choices': choices})
+    session['history'] = history
+    session['inventory'] = current_inventory
+    
+    return jsonify({"scene": scene, "choices": choices, "inventory": current_inventory})
+
 def parse_game_response(text):
-    scene_match = re.search(r'SCENA:\s*([\s\S]*?)\s*SCELTE:', text, re.DOTALL)
+    scene_match = re.search(r'SCENA:\s*([\s\S]*?)\s*(OGGETTO:|SCELTE:)', text, re.DOTALL)
+    item_match = re.search(r'OGGETTO:\s*([\s\S]*?)\s*SCELTE:', text, re.DOTALL)
     choices_match = re.search(r'SCELTE:\s*([\s\S]*)', text, re.DOTALL)
 
-    scene = "Descrizione non trovata. Riprova."
+    scene = "Descrizione non trovata. Riprova. Probabilmente Ollama si è interrotto."
+    item = None
     choices = ["Scelte non trovate. Riprova."]
-
+    
     if scene_match:
         scene = scene_match.group(1).strip()
     
+    if item_match:
+        item_text = item_match.group(1).strip()
+        if item_text and item_text.lower() not in ["vuoto", "nessuno", "nessun oggetto"]:
+            item = item_text
+
     if choices_match:
         choices_text = choices_match.group(1).strip()
         choices = [c.strip() for c in choices_text.split('\n') if c.strip()]
+        
+    if not choices:
+        choices = ["Scelte non trovate. Riprova."]
 
-    return scene, choices
+    return scene, item, choices
 
 if __name__ == '__main__':
     app.run(debug=True)
